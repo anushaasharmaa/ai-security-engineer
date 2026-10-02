@@ -1,0 +1,17 @@
+# Gitleaks configuration for the midterm demo.
+#
+# Keeps all default Gitleaks rules and adds one rule for the clearly fake
+# placeholder used in test-repo/. The placeholder is deliberately low-entropy
+# and obviously fake, so the default rules would not reliably flag it (and a
+# realistic-looking key would trip GitHub push protection).
+title = "AI Security Engineer - gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "demo-fake-api-key"
+description = "Hardcoded API key (demo placeholder, not a real credential)"
+regex = '''FAKE_[A-Z_]*KEY_FOR_TESTING_ONLY[A-Za-z0-9_]*'''
+keywords = ["for_testing_only"]
+tags = ["demo", "hardcoded-credential"]

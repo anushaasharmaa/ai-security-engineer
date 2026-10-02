@@ -1,0 +1,25 @@
+[
+ {
+  "RuleID": "demo-fake-api-key",
+  "Description": "Hardcoded API key (demo placeholder, not a real credential)",
+  "StartLine": 9,
+  "EndLine": 9,
+  "StartColumn": 13,
+  "EndColumn": 58,
+  "Match": "REDACTED",
+  "Secret": "REDACTED",
+  "File": "test-repo/config.py",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.3438954,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [
+   "demo",
+   "hardcoded-credential"
+  ],
+  "Fingerprint": "test-repo/config.py:demo-fake-api-key:9"
+ }
+]

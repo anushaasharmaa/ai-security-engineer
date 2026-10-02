@@ -1,0 +1,139 @@
+# Local Semgrep rules for the midterm demo.
+#
+# Kept in the repo (instead of pulling registry packs like p/python) so scans are
+# deterministic and need no network access or Semgrep login.
+#
+# metadata.finding_type / metadata.cwe / metadata.owasp are read by
+# normalizer/semgrep_parser.py. Severity is assigned by the rule author.
+rules:
+  - id: python-sql-injection
+    languages: [python]
+    severity: HIGH
+    message: >-
+      SQL query is built with string formatting or concatenation and passed to
+      execute(). If any part of the string is user-controlled this is SQL
+      injection. Use parameterized queries instead.
+    metadata:
+      finding_type: SQL Injection
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+    pattern-either:
+      - pattern: $CUR.execute(f"...", ...)
+      - pattern: $CUR.execute("..." + $X, ...)
+      - pattern: $CUR.execute("..." + $X + "...", ...)
+      - pattern: $CUR.execute("..." % $X, ...)
+      - pattern: $CUR.execute("...".format(...), ...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $Q = f"..."
+                  ...
+              - pattern-inside: |
+                  $Q = "..." + $X
+                  ...
+              - pattern-inside: |
+                  $Q = "..." + $X + "..."
+                  ...
+              - pattern-inside: |
+                  $Q = "..." % $X
+                  ...
+              - pattern-inside: |
+                  $Q = "...".format(...)
+                  ...
+          - pattern: $CUR.execute($Q, ...)
+
+  - id: python-command-injection
+    languages: [python]
+    severity: CRITICAL
+    message: >-
+      A non-constant string is executed through a system shell. If any part of
+      it is user-controlled an attacker can run arbitrary OS commands. Pass an
+      argument list without shell=True.
+    metadata:
+      finding_type: Command Injection
+      cwe: "CWE-78"
+      owasp: "A03:2021 - Injection"
+    pattern-either:
+      - patterns:
+          - pattern: os.system($CMD)
+          - pattern-not: os.system("...")
+      - patterns:
+          - pattern: os.popen($CMD, ...)
+          - pattern-not: os.popen("...", ...)
+      - patterns:
+          - pattern: subprocess.$FUNC($CMD, ..., shell=True, ...)
+          - pattern-not: subprocess.$FUNC("...", ..., shell=True, ...)
+
+  - id: python-code-injection-eval
+    languages: [python]
+    severity: HIGH
+    message: >-
+      eval()/exec() is called on a non-constant value. If the value is
+      user-controlled this is arbitrary code execution. Use ast.literal_eval or
+      an explicit parser.
+    metadata:
+      finding_type: Code Injection
+      cwe: "CWE-95"
+      owasp: "A03:2021 - Injection"
+    pattern-either:
+      - patterns:
+          - pattern: eval($X, ...)
+          - pattern-not: eval("...", ...)
+      - patterns:
+          - pattern: exec($X, ...)
+          - pattern-not: exec("...", ...)
+
+  - id: python-insecure-deserialization
+    languages: [python]
+    severity: HIGH
+    message: >-
+      Unsafe deserialization. pickle (and yaml.load without a safe loader) can
+      execute arbitrary code when given untrusted data. Use JSON or
+      yaml.safe_load.
+    metadata:
+      finding_type: Insecure Deserialization
+      cwe: "CWE-502"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+
+  - id: python-flask-reflected-xss
+    languages: [python]
+    severity: MEDIUM
+    message: >-
+      Request data is placed directly into an HTML response without escaping,
+      which allows reflected cross-site scripting. Render through an
+      auto-escaping template or escape the value.
+    metadata:
+      finding_type: Cross-Site Scripting
+      cwe: "CWE-79"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-inside: |
+          $VAR = flask.request.$SRC.get(...)
+          ...
+      - pattern-either:
+          - pattern: return f"...{$VAR}..."
+          - pattern: return "..." + $VAR + "..."
+          - pattern: return "..." + $VAR
+          - pattern: flask.render_template_string(f"...{$VAR}...", ...)
+
+  - id: python-weak-hash
+    languages: [python]
+    severity: LOW
+    message: >-
+      MD5/SHA-1 are broken for security purposes. Use SHA-256 or stronger for
+      integrity, and a password hashing function (argon2, bcrypt, scrypt) for
+      passwords.
+    metadata:
+      finding_type: Weak Cryptography
+      cwe: "CWE-327"
+      owasp: "A02:2021 - Cryptographic Failures"
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)

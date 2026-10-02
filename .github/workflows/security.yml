@@ -1,0 +1,140 @@
+# Midterm pipeline: scan -> normalize -> publish results.
+#
+# The scan job never fails because findings exist: test-repo/ is intentionally
+# vulnerable, and blocking merges on findings is a final-phase feature.
+# It fails only if a scanner or the normalizer itself breaks.
+name: Security Scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  SCAN_TARGET: test-repo
+  GITLEAKS_VERSION: "8.28.0"
+
+jobs:
+  scan:
+    name: Semgrep + Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        # pipx keeps Semgrep's dependencies isolated from the project's.
+        run: pipx install semgrep
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Run Semgrep (JSON report)
+        run: |
+          mkdir -p reports
+          semgrep scan \
+            --config scanners/semgrep/rules \
+            --json --output reports/semgrep.json \
+            --metrics=off --disable-version-check --quiet \
+            "$SCAN_TARGET"
+
+      - name: Run Gitleaks (JSON report)
+        run: |
+          gitleaks dir "$SCAN_TARGET" \
+            --config scanners/gitleaks/gitleaks.toml \
+            --report-format json --report-path reports/gitleaks.json \
+            --redact --no-banner --exit-code 0
+
+      - name: Normalize findings
+        run: |
+          pip install --quiet "pydantic>=2.6,<3"
+          python -m normalizer \
+            --semgrep reports/semgrep.json \
+            --gitleaks reports/gitleaks.json \
+            --source-root . \
+            --output reports/normalized-findings.json
+
+      - name: Write job summary
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from collections import Counter
+          findings = json.load(open("reports/normalized-findings.json"))
+          severity = Counter(f["severity"] for f in findings)
+          print(f"## Security scan: {len(findings)} finding(s)\n")
+          print("| Critical | High | Medium | Low |\n|---|---|---|---|")
+          print(f"| {severity['CRITICAL']} | {severity['HIGH']} | {severity['MEDIUM']} | {severity['LOW']} |\n")
+          print("| Scanner | Severity | Type | Location | CWE |\n|---|---|---|---|---|")
+          for f in findings:
+              print(f"| {f['scanner']} | {f['severity']} | {f['finding_type']} | `{f['file_path']}:{f['line_number']}` | {f['cwe'] or ''} |")
+          PY
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: security-reports
+          path: reports/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      # Optional: push findings straight into a reachable backend.
+      # Runs only if the repository secret SECURITY_API_URL is set
+      # (e.g. https://your-backend.example.com). Without it, download the
+      # "security-reports" artifact and run: python -m scripts.run_pipeline --skip-scan
+      - name: Send findings to backend (optional)
+        env:
+          SECURITY_API_URL: ${{ secrets.SECURITY_API_URL }}
+        if: ${{ env.SECURITY_API_URL != '' }}
+        run: |
+          curl -sS --fail-with-body -X POST "${SECURITY_API_URL%/}/findings" \
+            -H "Content-Type: application/json" \
+            --data @reports/normalized-findings.json
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: secuser
+          POSTGRES_PASSWORD: secpass
+          POSTGRES_DB: security_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U secuser -d security_test_db"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg2://secuser:secpass@localhost:5432/security_test_db
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install scanners (for the end-to-end test)
+        run: |
+          pipx install semgrep
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+
+      - name: Run tests
+        run: python -m pytest -v

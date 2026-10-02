@@ -1,0 +1,24 @@
+# Local PostgreSQL with the pgvector extension.
+#   docker compose up -d db
+# The application itself (FastAPI, Streamlit) runs on the host, see README.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ai-sec-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-secuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secpass}
+      POSTGRES_DB: ${POSTGRES_DB:-security_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secuser} -d ${POSTGRES_DB:-security_db}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
